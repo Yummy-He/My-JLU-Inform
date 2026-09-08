@@ -11,30 +11,28 @@ TMP="$WORK/tmp"
 STAMP=$(date +%Y%m%d_%H%M)
 mkdir -p "$TMP" "$WORK/out" "$WORK/fail"
 
-# ===== 需你填写 =====
-GH_TOKEN=""
 GH_REPO="Yummy-He/My-JLU-Inform"
-# ===================
+GH_TOKEN=""
 [ -f "$WORK/gh_token.txt" ] && GH_TOKEN=$(cat "$WORK/gh_token.txt")
 
 UA="Mozilla/5.0 (Linux; mipsel) NotifyBot/1.0"
-BASE="https://chem.jlu.edu.cn/xwtz"
 
 # 抓学院：首页 + 动态解析「下页」抓第2页
 fetch_list() {
-  # $1=栏目相对路径  $2=输出前缀
-  curl -s -m 30 -A "$UA" -o "$TMP/${2}_p1.htm" "$BASE/$1"
+  # $1=首页完整URL  $2=输出前缀
+  curl -s -m 30 -A "$UA" -o "$TMP/${2}_p1.htm" "$1"
   next=$(grep -o 'class="p_next p_fun"><a href="[^"]*"' "$TMP/${2}_p1.htm" \
          | head -1 | sed -n 's/.*href="\([^"]*\)".*/\1/p')
   if [ -n "$next" ]; then
-    curl -s -m 30 -A "$UA" -o "$TMP/${2}_p2.htm" "$BASE/$next"
+    d=$(dirname "$1")
+    curl -s -m 30 -A "$UA" -o "$TMP/${2}_p2.htm" "$d/$next"
   else
     : > "$TMP/${2}_p2.htm"
   fi
 }
-fetch_list "tzgg.htm"     chem
-fetch_list "tzgg/bks.htm" bks
-fetch_list "tzgg/yjs.htm" yjs
+fetch_list "https://chem.jlu.edu.cn/xwtz/tzgg.htm"     chem
+fetch_list "https://chem.jlu.edu.cn/xwtz/tzgg/bks.htm" bks
+fetch_list "https://chem.jlu.edu.cn/xwtz/tzgg/yjs.htm" yjs
 
 # 抓 OA 内网首页（无需登录，30 条，含置顶）
 curl -s -m 30 -k -A "$UA" --max-filesize 2097152 \
@@ -42,7 +40,7 @@ curl -s -m 30 -k -A "$UA" --max-filesize 2097152 \
   -o "$TMP/oa.htm" \
   "https://oa.jlu.edu.cn/defaultroot/PortalInformation!jldxList.action?channelId=179577"
 
-# jq 打包
+# jq 打包（--rawfile 读文件，避免长字符串作为命令行参数）
 OUT="$WORK/out/$STAMP.json"
 jq -n \
   --arg stamp "$STAMP" \
@@ -54,13 +52,14 @@ jq -n \
     pages:{chem1:$chem1, chem2:$chem2, bks1:$bks1, bks2:$bks2,
            yjs1:$yjs1, yjs2:$yjs2, oa:$oa}}' > "$OUT"
 
-# GitHub Contents API 上传（新文件 PUT 无需 sha）
-B64=$(openssl base64 -A -in "$OUT")
-HTTP=$(curl -s -o /dev/null -w "%{http_code}" -m 60 -X PUT \
+# 上传：base64 与 body 都走文件，避免命令行参数超限
+openssl base64 -A -in "$OUT" > "$WORK/b64.txt"
+jq -n --arg msg "inbox $STAMP" --rawfile c "$WORK/b64.txt" '{message:$msg, content:$c}' > "$WORK/body.json"
+HTTP=$(curl -s -o /dev/null -w "%{http_code}" -m 90 -X PUT \
   -H "Authorization: token $GH_TOKEN" \
   -H "Accept: application/vnd.github+json" \
-  "https://api.github.com/repos/$GH_REPO/contents/data/inbox/$STAMP.json" \
-  -d "{\"message\":\"inbox $STAMP\",\"content\":\"$B64\"}")
+  -d @"$WORK/body.json" \
+  "https://api.github.com/repos/$GH_REPO/contents/data/inbox/$STAMP.json")
 
 if [ "$HTTP" = "201" ] || [ "$HTTP" = "200" ]; then
   echo "[ok] upload $STAMP"
