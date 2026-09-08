@@ -12,8 +12,8 @@ OA_BASE = "https://oa.jlu.edu.cn/defaultroot"
 def parse_chem(html, source):
     """解析化学学院列表页 HTML。
 
-    source: chem / bks / yjs（用于去重与来源标记）
-    返回: [{id(url), title, url, date, summary, org:"", source}]
+    source: chem / bks / yjs
+    返回: [{id(url), title, url, date, dt(None), summary, org, source}]
     """
     soup = BeautifulSoup(html, "html.parser")
     items = []
@@ -22,7 +22,6 @@ def parse_chem(html, source):
         if not a or not a.get("href"):
             continue
         href = a["href"]
-        # 从相对路径里提取 /info/xxx/yyy.htm，拼绝对 URL（对 ../info 与 ../../info 均适用）
         m = re.search(r"/info/\d+/\d+\.htm", href)
         if m:
             url = CHEM_BASE + m.group(0)
@@ -42,10 +41,11 @@ def parse_chem(html, source):
             summary = re.sub(r"\s+", " ", abst.get_text(" ", strip=True)).strip()
 
         items.append({
-            "id": url,                          # 学院以 url 作为去重 id
+            "id": url,
             "title": a.get_text(strip=True),
             "url": url,
             "date": date,
+            "dt": None,                          # 学院无精确时间
             "summary": summary,
             "org": "",
             "source": source,
@@ -53,26 +53,26 @@ def parse_chem(html, source):
     return items
 
 
-def _oa_abs_date(raw, fetched_date):
-    """把 OA 的「今天/昨天」时间换算为绝对日期 YYYY-MM-DD。"""
+def _oa_datetime(raw, fetched_date):
+    """把 OA 的「今天/昨天 HH:MM」换成完整时间，返回 (date, dt)。"""
     s = raw.replace("\xa0", " ").replace("&nbsp;", " ").strip()
-    if s.startswith("今天"):
-        return fetched_date
-    if s.startswith("昨天"):
+    m = re.match(r"今天\s+(\d{1,2}:\d{2})", s)
+    if m:
+        return fetched_date, f"{fetched_date} {m.group(1)}"
+    m = re.match(r"昨天\s+(\d{1,2}:\d{2})", s)
+    if m:
         try:
             d = datetime.strptime(fetched_date, "%Y-%m-%d") - timedelta(days=1)
-            return d.strftime("%Y-%m-%d")
+            ds = d.strftime("%Y-%m-%d")
         except ValueError:
-            return fetched_date
-    return s
+            ds = fetched_date
+        return ds, f"{ds} {m.group(1)}"
+    # 已是 2026-09-03 这类具体日期，无精确时间
+    return s, None
 
 
 def parse_oa(html, fetched_date):
-    """解析学校 OA 列表页 HTML（无需登录）。
-
-    fetched_date: 抓取日期 YYYY-MM-DD（用于换算今天/昨天）
-    返回: [{id(数字字符串), title, url, date, summary:"", org, source:"oa"}]
-    """
+    """解析学校 OA 列表页 HTML（无需登录）。"""
     soup = BeautifulSoup(html, "html.parser")
     items = []
     for div in soup.select("div.li.rel"):
@@ -92,14 +92,15 @@ def parse_oa(html, fetched_date):
 
         time_sp = div.select_one("span.time")
         raw_time = time_sp.get_text(" ", strip=True) if time_sp else ""
-        date = _oa_abs_date(raw_time, fetched_date)
+        date, dt = _oa_datetime(raw_time, fetched_date)
 
         items.append({
-            "id": oid,                          # OA 以数字 id 去重
+            "id": oid,
             "title": title,
             "url": f"{OA_BASE}/PortalInformation!getInformation.action?id={oid}&channelId=179577",
             "date": date,
-            "summary": "",                      # OA 列表无摘要
+            "dt": dt,                            # OA 有精确时间（今天/昨天）
+            "summary": "",
             "org": org,
             "source": "oa",
         })

@@ -1,11 +1,16 @@
 # -*- coding: utf-8 -*-
-"""主逻辑：解析 inbox → 去重 → DeepSeek 分类 → QQ 推送 → 写回 seen。"""
+"""主逻辑：解析 inbox → 去重/时间窗 → DeepSeek 分类 → QQ 推送。
+
+两种模式（互不干扰）：
+- auto   （定时触发）：seen.json 增量去重，只推本周期新增，推送后更新 seen。
+- manual （QQ「更新」触发）：以触发时刻为基准推最近 12 小时，不读不写 seen。
+"""
 import os
 import re
 import sys
 import json
 import glob
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import requests
 
@@ -21,6 +26,10 @@ DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
 QQ_APP_ID = os.environ.get("QQ_APP_ID", "")
 QQ_APP_SECRET = os.environ.get("QQ_APP_SECRET", "")
 QQ_USER_OPENID = os.environ.get("QQ_USER_OPENID", "")
+
+MODE = os.environ.get("MODE", "auto")          # auto / manual
+TRIGGER_TS = os.environ.get("TRIGGER_TS", "")  # 手动触发时刻（ISO）
+WINDOW_HOURS = 12
 
 
 # ---------- seen ----------
@@ -38,7 +47,6 @@ def save_seen(seen):
 
 # ---------- inbox ----------
 def parse_inbox_file(path):
-    """解析一个 inbox JSON，返回其中的通知列表。"""
     with open(path, encoding="utf-8") as f:
         data = json.load(f)
     ts = data.get("ts", "")
@@ -58,7 +66,7 @@ def parse_inbox_file(path):
 
 
 def dedup(notices, seen):
-    """过滤已见过的通知，返回新增列表。"""
+    """auto 模式：过滤已见过的通知。"""
     new = []
     for n in notices:
         if n["source"] == "oa":
@@ -78,6 +86,33 @@ def mark_seen(seen, notices):
         else:
             seen["chem_urls"][n["url"]] = n.get("date", "")
     return seen
+
+
+def filter_manual_window(notices, trigger_ts):
+    """manual 模式：以触发时刻为基准，推最近 12 小时。"""
+    try:
+        t = datetime.fromisoformat(trigger_ts[:19])  # 截前19字符，忽略时区，与解析出的 naive 时间比较
+    except Exception:
+        t = datetime.now()
+    start = t - timedelta(hours=WINDOW_HOURS)
+    out = []
+    for n in notices:
+        if n["source"] == "oa" and n.get("dt"):
+            # OA 有精确时间：只用 dt 判断，不 fallback 到日期
+            try:
+                if datetime.strptime(n["dt"], "%Y-%m-%d %H:%M") >= start:
+                    out.append(n)
+            except ValueError:
+                pass
+            continue
+        if n.get("date"):
+            # 学院只有日期：按日期近似过滤
+            try:
+                if datetime.strptime(n["date"], "%Y-%m-%d").date() >= start.date():
+                    out.append(n)
+            except ValueError:
+                pass
+    return out
 
 
 # ---------- DeepSeek ----------
@@ -141,7 +176,6 @@ def _markdown_to_plain(text):
 
 
 def qq_send(token, openid, markdown_text):
-    """先试 Markdown，失败降级纯文本。返回是否成功。"""
     for msg_type, content in ((2, markdown_text), (0, _markdown_to_plain(markdown_text))):
         body = {"msg_type": msg_type}
         if msg_type == 2:
@@ -168,9 +202,9 @@ def qq_send(token, openid, markdown_text):
 
 
 # ---------- 文案 ----------
-def build_message(rel, oth, stamp):
-    """一条消息：相关详情 + 其余简要。"""
-    lines = [f"## JLU通知 · {stamp}"]
+def build_message(rel, oth, stamp, mode):
+    head = "## JLU通知 · 手动更新（最近12小时）" if mode == "manual" else f"## JLU通知 · {stamp}"
+    lines = [head]
     if rel:
         lines.append("")
         lines.append(f"### 与你相关 {len(rel)} 条")
@@ -200,7 +234,7 @@ def main():
         print("[error] DEEPSEEK_API_KEY 未配置", file=sys.stderr)
         sys.exit(2)
     if not (QQ_APP_ID and QQ_APP_SECRET and QQ_USER_OPENID):
-        print("[error] QQ 配置不完整（QQ_APP_ID/QQ_APP_SECRET/QQ_USER_OPENID）", file=sys.stderr)
+        print("[error] QQ 配置不完整", file=sys.stderr)
         sys.exit(2)
 
     seen = load_seen()
@@ -212,10 +246,16 @@ def main():
         except Exception as e:
             print(f"[warn] 跳过 {os.path.basename(p)}: {e}", file=sys.stderr)
 
-    new = dedup(all_notices, seen)
-    print(f"[info] inbox={len(inbox_files)} 总通知={len(all_notices)} 新增={len(new)}")
+    if MODE == "manual":
+        trigger = TRIGGER_TS or datetime.now().isoformat()
+        new = filter_manual_window(all_notices, trigger)
+        print(f"[info] manual 模式：触发时刻={trigger}，12小时内通知={len(new)}")
+    else:
+        new = dedup(all_notices, seen)
+        print(f"[info] auto 模式：inbox={len(inbox_files)} 总通知={len(all_notices)} 新增={len(new)}")
+
     if not new:
-        print("[info] 无新增通知，结束")
+        print("[info] 无通知，结束")
         return
 
     result = call_deepseek(new)
@@ -231,7 +271,6 @@ def main():
         if n:
             n["cat"] = r.get("cat", "其他")
             oth.append(n)
-    # 模型没覆盖到的（异常情况）归入 others，避免丢失
     covered = {str(r.get("id")) for r in result.get("relevant", []) + result.get("others", [])}
     for i, n in idx.items():
         if i not in covered:
@@ -239,19 +278,20 @@ def main():
             oth.append(n)
 
     stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-    msg = build_message(rel, oth, stamp)
-    print("[info] 推送内容：")
+    msg = build_message(rel, oth, stamp, MODE)
     print(msg)
 
     token = qq_get_token(QQ_APP_ID, QQ_APP_SECRET)
-    ok = qq_send(token, QQ_USER_OPENID, msg)
-    if not ok:
+    if not qq_send(token, QQ_USER_OPENID, msg):
         print("[error] QQ 推送失败", file=sys.stderr)
         sys.exit(1)
 
-    mark_seen(seen, new)
-    save_seen(seen)
-    print(f"[info] 完成：相关 {len(rel)} 条，其余 {len(oth)} 条，已写入 seen.json")
+    if MODE == "auto":
+        mark_seen(seen, new)
+        save_seen(seen)
+        print(f"[info] auto：已更新 seen（相关 {len(rel)}，其余 {len(oth)}）")
+    else:
+        print(f"[info] manual：不更新 seen（相关 {len(rel)}，其余 {len(oth)}）")
 
 
 if __name__ == "__main__":

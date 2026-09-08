@@ -4,7 +4,18 @@ on:
   schedule:
     - cron: '35 4 * * *'   # 北京 12:35
     - cron: '5 11 * * *'   # 北京 19:05
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: '运行模式'
+        required: false
+        default: 'auto'
+        type: choice
+        options: [auto, manual]
+      trigger_ts:
+        description: '手动触发时刻（ISO，仅 manual 模式用）'
+        required: false
+        default: ''
 
 permissions:
   contents: write
@@ -25,6 +36,8 @@ jobs:
           QQ_APP_ID: ${{ secrets.QQ_APP_ID }}
           QQ_APP_SECRET: ${{ secrets.QQ_APP_SECRET }}
           QQ_USER_OPENID: ${{ secrets.QQ_USER_OPENID }}
+          MODE: ${{ github.event.inputs.mode || 'auto' }}
+          TRIGGER_TS: ${{ github.event.inputs.trigger_ts || '' }}
         run: python scripts/analyze.py
       - name: commit seen.json
         run: |
