@@ -1,15 +1,32 @@
 /**
  * QQ 手动触发监听器（Cloudflare Worker）
  *
- * 部署：Cloudflare Workers，绑定 secrets：
- *   GH_TOKEN       GitHub fine-grained PAT（Contents 写）
- *   QQ_APP_ID / QQ_APP_SECRET
+ * Secrets：GH_TOKEN、QQ_APP_ID、QQ_APP_SECRET
  *
- * 收到用户私聊「更新」→ 写 GitHub data/trigger/<ts>.json → 回复 QQ。
- * 后续由路由器轮询该 trigger 文件，完成抓取+触发 Action。
+ * 流程：
+ *  - QQ 配置回调时发 op=13 验证 → 用 QQ_APP_SECRET 做 Ed25519 签名回包
+ *  - 用户私聊「更新」→ 写 GitHub data/trigger/<ts>.json → 回复 QQ
  */
 const REPO = "Yummy-He/My-JLU-Inform";
 const GH_API = `https://api.github.com/repos/${REPO}`;
+
+// 与 QQ 官方 Go 示例一致：secret 重复到 >=32 字节再截前 32 字节作为 seed
+function buildSeed(secret) {
+  let seed = secret;
+  while (seed.length < 32) seed += seed;
+  return seed.slice(0, 32);
+}
+
+async function ed25519Sign(secret, dataStr) {
+  const seed = buildSeed(secret);
+  const seedBytes = new TextEncoder().encode(seed);
+  const key = await crypto.subtle.importKey(
+    "raw", seedBytes, { name: "Ed25519" }, false, ["sign"]);
+  const msg = new TextEncoder().encode(dataStr);
+  const sig = await crypto.subtle.sign({ name: "Ed25519" }, key, msg);
+  return Array.from(new Uint8Array(sig))
+    .map((b) => b.toString(16).padStart(2, "0")).join("");
+}
 
 async function qqToken(env) {
   const r = await fetch("https://api.bot.qq.com/app/getAppAccessToken", {
@@ -50,11 +67,8 @@ async function writeTrigger(env, ts) {
 
 export default {
   async fetch(request, env) {
-    if (request.method === "GET") {
-      return new Response("ok", { status: 200 });
-    }
     if (request.method !== "POST") {
-      return new Response("method not allowed", { status: 405 });
+      return new Response("ok", { status: 200 });
     }
     let body;
     try {
@@ -67,12 +81,15 @@ export default {
     const t = body.t;
     const d = body.d || {};
 
-    // 鉴权/心跳等非事件消息直接忽略
-    if (op !== 0 || !t) {
-      return new Response("ok", { status: 200 });
+    // 回调地址验证：op=13，签名 event_ts + plain_token 后回包
+    if (op === 13) {
+      const plain_token = d.plain_token || "";
+      const event_ts = d.event_ts || "";
+      const signature = await ed25519Sign(env.QQ_APP_SECRET, event_ts + plain_token);
+      return Response.json({ plain_token, signature });
     }
 
-    if (t === "C2C_MESSAGE_CREATE") {
+    if (op === 0 && t === "C2C_MESSAGE_CREATE") {
       const content = (d.content || "").trim();
       const openid = (d.author && d.author.user_openid) || "";
       if (/更新|刷新|推送/.test(content)) {
@@ -83,9 +100,8 @@ export default {
         } catch (e) {
           ok = false;
         }
-        let token;
         try {
-          token = await qqToken(env);
+          const token = await qqToken(env);
           await qqReply(env, token, openid,
             ok ? "✅ 已收到更新请求，约 3~5 分钟后推送最近 12 小时通知"
                : "❌ 触发失败，请稍后重试");
