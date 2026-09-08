@@ -42,13 +42,15 @@ curl -s -m 30 -k -A "$UA" --max-filesize 2097152 \
 
 # jq 打包（--rawfile 读文件，避免长字符串作为命令行参数）
 OUT="$WORK/out/$STAMP.json"
+TS=$(date +"%Y-%m-%dT%H:%M:%S%z")
 jq -n \
   --arg stamp "$STAMP" \
+  --arg ts "$TS" \
   --rawfile chem1 "$TMP/chem_p1.htm" --rawfile chem2 "$TMP/chem_p2.htm" \
   --rawfile bks1  "$TMP/bks_p1.htm"  --rawfile bks2  "$TMP/bks_p2.htm" \
   --rawfile yjs1  "$TMP/yjs_p1.htm"  --rawfile yjs2  "$TMP/yjs_p2.htm" \
   --rawfile oa    "$TMP/oa.htm" \
-  '{stamp:$stamp, ts:(now|strftime("%Y-%m-%dT%H:%M:%S%z")),
+  '{stamp:$stamp, ts:$ts,
     pages:{chem1:$chem1, chem2:$chem2, bks1:$bks1, bks2:$bks2,
            yjs1:$yjs1, yjs2:$yjs2, oa:$oa}}' > "$OUT"
 
