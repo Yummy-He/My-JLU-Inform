@@ -10,7 +10,7 @@ import re
 import sys
 import json
 import glob
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import requests
 
@@ -88,12 +88,32 @@ def mark_seen(seen, notices):
     return seen
 
 
+CST = timezone(timedelta(hours=8))
+
+
+def _parse_trigger(trigger_ts):
+    """把触发时刻统一转成北京时间(naive)。
+
+    Worker 写入的是 UTC ISO（带 Z）；路由器/action 原样透传。
+    通知里的时间都是北京时间(naive)，所以这里统一到北京时间再比较。
+    """
+    if trigger_ts:
+        s = trigger_ts.strip()
+        try:
+            if s.endswith("Z"):
+                s = s[:-1] + "+00:00"
+            t = datetime.fromisoformat(s)
+            if t.tzinfo is not None:
+                return t.astimezone(CST).replace(tzinfo=None)
+            return t
+        except ValueError:
+            pass
+    return datetime.now()
+
+
 def filter_manual_window(notices, trigger_ts):
     """manual 模式：以触发时刻为基准，推最近 12 小时。"""
-    try:
-        t = datetime.fromisoformat(trigger_ts[:19])  # 截前19字符，忽略时区，与解析出的 naive 时间比较
-    except Exception:
-        t = datetime.now()
+    t = _parse_trigger(trigger_ts)
     start = t - timedelta(hours=WINDOW_HOURS)
     out = []
     for n in notices:
