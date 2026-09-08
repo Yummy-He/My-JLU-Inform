@@ -63,18 +63,18 @@ My-JLU-Inform/
 ### Phase 2 · 本地验证
 - [x] 用实测 HTML 样本验证解析逻辑（Python，90 条解析 + 去重幂等通过）
 
-### Phase 3 · 上传仓库
-- [ ] 获取 GitHub PAT（**需用户**）
-- [ ] 上传代码到 My-JLU-Inform
+### Phase 3 · 上传仓库（已完成）
+- [x] 获取 GitHub PAT（已提供）
+- [x] 上传代码到 My-JLU-Inform（main 分支，11 文件）
 
-### Phase 4 · 路由器部署
-- [ ] 上传 fetch_and_upload.sh 到 `/media/AiCard_01/notify/`
-- [ ] 配 cron + `mtd_storage.sh save` 固化
+### Phase 4 · 路由器部署（已完成）
+- [x] 上传 fetch_and_upload.sh 到 `/media/AiCard_01/notify/`（2518B，sh -n 通过）
+- [x] 配 cron（12:31/19:01）+ mtd_storage.sh save 固化
 
 ### Phase 5 · Secrets + 联调（需用户）
 - [ ] `DEEPSEEK_API_KEY`
 - [ ] `QQ_APP_ID` / `QQ_APP_SECRET` / `QQ_USER_OPENID`
-- [ ] 端到端测试
+- [ ] 端到端测试（待 Secrets）
 
 ---
 
@@ -98,6 +98,12 @@ My-JLU-Inform/
 
 ## 七、进度日志
 
+- 2026-09-08：路由器抓取脚本实测上传成功（inbox 20260908_2000，120 条通知），seen.json 基线已初始化。
+- 2026-09-08：修复 fetch 脚本两处 bug（dirname 拼第2页 URL、上传 body 改文件避免命令行超限）。
+
+## 七、进度日志
+
 - 2026-09-08：完成全部探测（路由器内存/工具、学院分页、OA 结构、QQ API），方案 v2 定稿。
 - 2026-09-08：开始 Phase 1 代码实现。
+
 
