@@ -71,10 +71,10 @@ My-JLU-Inform/
 - [x] 上传 fetch_and_upload.sh 到 `/media/AiCard_01/notify/`（2518B，sh -n 通过）
 - [x] 配 cron（12:31/19:01）+ mtd_storage.sh save 固化
 
-### Phase 5 · Secrets + 联调（需用户）
-- [ ] `DEEPSEEK_API_KEY`
-- [ ] `QQ_APP_ID` / `QQ_APP_SECRET` / `QQ_USER_OPENID`
-- [ ] 端到端测试（待 Secrets）
+### Phase 5 · Secrets + 联调（已完成）
+- [x] `DEEPSEEK_API_KEY`
+- [x] `QQ_APP_ID` / `QQ_APP_SECRET` / `QQ_USER_OPENID`（已采集 openid）
+- [x] 端到端测试（QQ推送+DeepSeek分类+Action链路均通过）（待 Secrets）
 
 ---
 
@@ -105,5 +105,6 @@ My-JLU-Inform/
 
 - 2026-09-08：完成全部探测（路由器内存/工具、学院分页、OA 结构、QQ API），方案 v2 定稿。
 - 2026-09-08：开始 Phase 1 代码实现。
+
 
 
