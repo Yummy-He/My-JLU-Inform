@@ -332,6 +332,11 @@ def _fmt_relevant(n, head):
     return chr(10).join(parts)
 
 
+def _source_label(n):
+    src = n.get("source", "")
+    return {"chem": "化学学院", "bks": "化学学院", "yjs": "化学学院", "oa": "学校通知"}.get(src, "来源未知")
+
+
 def _fmt_others(oth, head):
     parts = [head]
     cats = {}
@@ -345,7 +350,9 @@ def _fmt_others(oth, head):
         for n in items:
             brief = _clip(n.get("brief") or "", 80)
             t = n.get("title") or ""
-            line = t + "：" + brief if brief else t
+            line = "【" + _source_label(n) + "】" + t
+            if brief:
+                line += "：" + brief
             parts.append(_indent(line))
     parts.append("")
     parts.append("完整清单见仓库 data/notices")
