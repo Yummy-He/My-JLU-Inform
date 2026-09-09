@@ -345,6 +345,7 @@ def clean_inbox(batches):
         if not stamp:
             stamp = name
         dest = os.path.join(NOTICES, f"{stamp}.json")
+        notices = _dedup_within(notices)
         with open(dest, "w", encoding="utf-8") as f:
             json.dump({"stamp": stamp, "ts": ts, "notices": notices}, f, ensure_ascii=False, indent=2)
         try:
@@ -364,7 +365,7 @@ def main():
         sys.exit(2)
 
     seen = load_seen()
-    inbox_files = sorted(glob.glob(os.path.join(INBOX, "*.json")))
+    inbox_files = sorted(glob.glob(os.path.join(INBOX, "*.json")), reverse=True)  # 新文件优先，保证 OA 详情正文不被旧文件覆盖
     batches = []
     all_notices = []
     for p in inbox_files:
@@ -375,6 +376,7 @@ def main():
         except Exception as e:
             print(f"[warn] 跳过 {os.path.basename(p)}: {e}", file=sys.stderr)
 
+    all_notices = _dedup_within(all_notices)
     if MODE == "manual":
         trigger = TRIGGER_TS or datetime.now().isoformat()
         new = filter_manual_window(all_notices, trigger)
@@ -416,6 +418,10 @@ def main():
     msg = build_message(rel, oth, stamp, MODE)
     print(msg)
 
+    if os.environ.get("ANALYZE_DRY_RUN") == "1":
+        print("[dry-run] 跳过 QQ 发送，消息如下：")
+        print(msg)
+        return
     token = qq_get_token(QQ_APP_ID, QQ_APP_SECRET)
     if not qq_send(token, QQ_USER_OPENID, msg):
         print("[error] QQ 推送失败", file=sys.stderr)
@@ -432,4 +438,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
