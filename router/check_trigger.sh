@@ -29,8 +29,8 @@ OPENID=$(echo "$CONTENT" | base64 -d 2>/dev/null | jq -r '.openid // ""' 2>/dev/
 
 echo "[trigger] 发现手动触发 $TS，开始抓取..."
 
-# 2) 抓取上传（复用现有脚本）
-"$WORK/fetch_and_upload.sh"
+# 2) 抓取上传（复用现有脚本；手动触发不再额外派发 auto，避免重复推送）
+"$WORK/fetch_and_upload.sh" --no-dispatch
 
 # 3) 触发 workflow（manual 模式 + 触发时刻）
 curl -s -m 30 -X POST -H "$AUTH" -H "$HDR" \

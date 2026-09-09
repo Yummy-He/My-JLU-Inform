@@ -3,6 +3,8 @@
 # 部署位置：/media/AiCard_01/notify/fetch_and_upload.sh（TF 卡，持久）
 # cron：31 12 * * * 和 1 19 * * *（Padavan 本地 CST）
 set -u
+AUTO_DISPATCH=1
+[ "$1" = "--no-dispatch" ] && AUTO_DISPATCH=0
 
 export PATH=/usr/sbin:/usr/bin:/bin:/sbin   # curl/jq 在 /usr/sbin
 
@@ -12,6 +14,7 @@ STAMP=$(date +%Y%m%d_%H%M)
 mkdir -p "$TMP" "$WORK/out" "$WORK/fail"
 
 GH_REPO="Yummy-He/My-JLU-Inform"
+API="https://api.github.com/repos/$GH_REPO"
 GH_TOKEN=""
 [ -f "$WORK/gh_token.txt" ] && GH_TOKEN=$(cat "$WORK/gh_token.txt")
 
@@ -82,6 +85,10 @@ HTTP=$(curl -s -o /dev/null -w "%{http_code}" -m 120 -X PUT \
 
 if [ "$HTTP" = "201" ] || [ "$HTTP" = "200" ]; then
   echo "[ok] upload $STAMP"
+  if [ "$AUTO_DISPATCH" = "1" ]; then
+    curl -s -m 30 -X POST       -H "Authorization: token $GH_TOKEN"       -H "Accept: application/vnd.github+json"       "$API/actions/workflows/digest.yml/dispatches"       -d '{"ref":"main","inputs":{"mode":"auto"}}' -o /dev/null
+    echo "[ok] dispatch auto"
+  fi
 else
   cp "$OUT" "$WORK/fail/$STAMP.json"
   echo "[fail] upload $STAMP http=$HTTP (已存 fail/ 可补传)"
