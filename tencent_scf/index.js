@@ -200,45 +200,61 @@ async function writeTrigger(env, ts, openid) {
   return true;
 }
 
-async function ensureSubscribed(env, openid) {
-  if (!openid) return false;
+async function readSubscribers(env) {
   const path = 'data/subscribers.json';
   const url = `${GH_API}/contents/${path}`;
-  let ids = [];
-  let sha = null;
   const get = await httpsRequest('GET', url, {
     Authorization: `token ${env.GH_TOKEN}`,
     Accept: 'application/vnd.github+json',
   });
-  if (get.status === 200) {
-    try {
-      const j = JSON.parse(get.body);
-      sha = j.sha;
-      const raw = Buffer.from(j.content, 'base64').toString('utf8');
-      const d = JSON.parse(raw);
-      ids = d.openids || [];
-    } catch (e) {
-      console.error('[subscribers parse]', e && e.message ? e.message : e);
-    }
-  } else if (get.status !== 404) {
+  if (get.status === 404) return { ids: [], sha: null };
+  if (get.status !== 200) {
     console.error('[subscribers get]', get.status, (get.body || '').slice(0, 200));
-    return false;
+    return { ids: null, sha: null };
   }
+  try {
+    const j = JSON.parse(get.body);
+    const raw = Buffer.from(j.content, 'base64').toString('utf8');
+    const d = JSON.parse(raw);
+    return { ids: d.openids || [], sha: j.sha };
+  } catch (e) {
+    console.error('[subscribers parse]', e && e.message ? e.message : e);
+    return { ids: null, sha: null };
+  }
+}
 
-  if (ids.includes(openid)) return true;
-
-  ids.push(openid);
+async function writeSubscribers(env, ids, sha, action, openid) {
+  const path = 'data/subscribers.json';
+  const url = `${GH_API}/contents/${path}`;
   const body = JSON.stringify({ openids: ids }, null, 2);
   const b64 = Buffer.from(body).toString('base64');
   const put = await httpsRequest('PUT', url, {
     Authorization: `token ${env.GH_TOKEN}`,
     Accept: 'application/vnd.github+json',
   }, {
-    message: `subscribe ${openid.slice(0, 12)}`,
+    message: `${action} ${openid.slice(0, 12)}`,
     content: b64,
     sha,
   });
   return put.status >= 200 && put.status < 300;
+}
+
+async function ensureSubscribed(env, openid) {
+  if (!openid) return false;
+  const { ids, sha } = await readSubscribers(env);
+  if (ids == null) return false;
+  if (ids.includes(openid)) return true;
+  ids.push(openid);
+  return await writeSubscribers(env, ids, sha, 'subscribe', openid);
+}
+
+async function removeSubscriber(env, openid) {
+  if (!openid) return false;
+  const { ids, sha } = await readSubscribers(env);
+  if (ids == null) return false;
+  const next = ids.filter((x) => x !== openid);
+  if (next.length === ids.length) return true; // 本来就不在列表里
+  return await writeSubscribers(env, next, sha, 'unsubscribe', openid);
 }
 
 function jsonResp(status, obj) {
@@ -283,6 +299,21 @@ exports.main_handler = async (event) => {
   if (op === 0 && t === 'C2C_MESSAGE_CREATE') {
     const content = (d.content || '').trim();
     const openid = (d.author && d.author.user_openid) || '';
+    if (/退订|取消订阅|退定/.test(content)) {
+      let unsubOk = false;
+      try {
+        unsubOk = await removeSubscriber(env, openid);
+      } catch (e) {
+        console.error('[removeSubscriber]', e && e.message ? e.message : e);
+      }
+      try {
+        const token = await qqToken(env);
+        await qqReply(env, token, openid, unsubOk ? '✅ 已退订，之后不会再收到推送' : '❌ 退订失败，请稍后重试');
+      } catch (e) {
+        console.error('[qqReply]', e && e.message ? e.message : e);
+      }
+      return jsonResp(200, { unsubscribed: unsubOk });
+    }
     if (/更新|刷新|推送/.test(content)) {
       const ts = new Date().toISOString();
       let ok = false;

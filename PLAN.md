@@ -113,3 +113,4 @@ My-JLU-Inform/
 - 2026-09-09：改为 deepseek-v4-flash + thinking disabled；有关项全文推送、无关项简报；路由器新增抓 OA 详情正文；inbox 清洗归档到 data/notices；修复 inbox 日期解析与 OA 列表重复 extend 的 bug。
 - 2026-09-09：修复跨 inbox 文件重复推送（全局按 OA id / 学院 url 去重）；inbox 解析按新文件优先，保证 OA 详情正文不被旧文件覆盖。
 - 2026-09-09：推送排版改为「有关的一条一消息、无关的聚合为一条」，去掉 Markdown 列表点号，改用标题加粗 + 全角空格首行缩进；OA 标题优先取详情页完整标题。
+- 2026-09-09：支持多订阅者（data/subscribers.json）；手动「更新」只推给发起人（target_openid）；新增「退订」移除订阅。
