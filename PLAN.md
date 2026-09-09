@@ -112,3 +112,4 @@ My-JLU-Inform/
 - 2026-09-09：workers.dev 被墙，改用腾讯云函数 SCF（事件函数 + 函数URL）；修复 Node https 缺 User-Agent 导致 GitHub API 403；手动触发全链路验证通过。
 - 2026-09-09：改为 deepseek-v4-flash + thinking disabled；有关项全文推送、无关项简报；路由器新增抓 OA 详情正文；inbox 清洗归档到 data/notices；修复 inbox 日期解析与 OA 列表重复 extend 的 bug。
 - 2026-09-09：修复跨 inbox 文件重复推送（全局按 OA id / 学院 url 去重）；inbox 解析按新文件优先，保证 OA 详情正文不被旧文件覆盖。
+- 2026-09-09：推送排版改为「有关的一条一消息、无关的聚合为一条」，去掉 Markdown 列表点号，改用标题加粗 + 全角空格首行缩进；OA 标题优先取详情页完整标题。
