@@ -4,7 +4,7 @@
 # cron：31 12 * * * 和 1 19 * * *（Padavan 本地 CST）
 set -u
 AUTO_DISPATCH=1
-[ "$1" = "--no-dispatch" ] && AUTO_DISPATCH=0
+[ "${1:-}" = "--no-dispatch" ] && AUTO_DISPATCH=0
 
 export PATH=/usr/sbin:/usr/bin:/bin:/sbin   # curl/jq 在 /usr/sbin
 

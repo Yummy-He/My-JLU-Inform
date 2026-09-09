@@ -464,7 +464,7 @@ def main():
     for n in new:
         fetch_chem_fulltext(n)
 
-    stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+    stamp = datetime.now(CST).strftime("%Y-%m-%d %H:%M")
     msgs = build_messages(rel, oth, stamp, MODE)
     for i, m in enumerate(msgs, 1):
         print(f"===== 消息 {i}/{len(msgs)} =====")
