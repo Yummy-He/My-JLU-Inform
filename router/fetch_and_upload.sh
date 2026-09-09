@@ -40,6 +40,20 @@ curl -s -m 30 -k -A "$UA" --max-filesize 2097152 \
   -o "$TMP/oa.htm" \
   "https://oa.jlu.edu.cn/defaultroot/PortalInformation!jldxList.action?channelId=179577"
 
+# 抓 OA 每条详情页（正文全文，供 Action 使用；OA 仅内网可访问，必须由路由器抓）
+jq -n '{}' > "$TMP/oa_details.json"
+grep -o 'getInformation\.action?id=[0-9]*&channelId=179577' "$TMP/oa.htm" \
+  | sed 's/.*id=\([0-9]*\).*/\1/' | sort -u > "$TMP/oa_ids.txt"
+while read -r oid; do
+  [ -z "$oid" ] && continue
+  curl -s -m 25 -k -A "$UA" -o "$TMP/oa_detail_$oid.htm" \
+    "https://oa.jlu.edu.cn/defaultroot/PortalInformation!getInformation.action?id=$oid&channelId=179577"
+  if jq --arg id "$oid" --rawfile h "$TMP/oa_detail_$oid.htm" '. + {($id): $h}' \
+       "$TMP/oa_details.json" > "$TMP/oa_details.tmp" 2>/dev/null; then
+    mv "$TMP/oa_details.tmp" "$TMP/oa_details.json"
+  fi
+done < "$TMP/oa_ids.txt"
+
 # jq 打包（--rawfile 读文件，避免长字符串作为命令行参数）
 OUT="$WORK/out/$STAMP.json"
 TS=$(date +"%Y-%m-%dT%H:%M:%S%z")
@@ -54,10 +68,13 @@ jq -n \
     pages:{chem1:$chem1, chem2:$chem2, bks1:$bks1, bks2:$bks2,
            yjs1:$yjs1, yjs2:$yjs2, oa:$oa}}' > "$OUT"
 
+# 合并 OA 详情正文
+jq -s '.[0] * {oa_details: (.[1] // {})}' "$OUT" "$TMP/oa_details.json" > "$OUT.tmp" && mv "$OUT.tmp" "$OUT"
+
 # 上传：base64 与 body 都走文件，避免命令行参数超限
 openssl base64 -A -in "$OUT" > "$WORK/b64.txt"
 jq -n --arg msg "inbox $STAMP" --rawfile c "$WORK/b64.txt" '{message:$msg, content:$c}' > "$WORK/body.json"
-HTTP=$(curl -s -o /dev/null -w "%{http_code}" -m 90 -X PUT \
+HTTP=$(curl -s -o /dev/null -w "%{http_code}" -m 120 -X PUT \
   -H "Authorization: token $GH_TOKEN" \
   -H "Accept: application/vnd.github+json" \
   -d @"$WORK/body.json" \

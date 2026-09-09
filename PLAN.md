@@ -20,9 +20,12 @@
 
 1. **AI 判断不做本地规则粗筛**（2026-09-08 用户明确要求）：
    - 把所有新通知一次性丢给 DeepSeek：学院送 `title + summary`，OA 送 `title + org`。
-   - 不做关键词预筛、不因省 token 而抓详情正文。一次批量调用，输出 JSON。
+   - 不做关键词预筛。一次批量调用，输出 JSON。
+   - 2026-09-09 起：模型固定 `deepseek-v4-flash`，调用时显式 `thinking:{"type":"disabled"}`（该模型默认带 reasoning_content，会污染 JSON 解析）。
+   - 2026-09-09 起：推送格式——「有关」全文推送；「无关」按分类给一句话简报。
 2. **路由器存储只用 TF 卡**（`/media/AiCard_01/notify/`）；`/etc/storage` 仅 704KB 闪存，不放大文件。
 3. **断电固化**：脚本/数据放 TF 卡天然持久；只有 cron 配置写 `/etc/storage`，改完必须 `/sbin/mtd_storage.sh save`。
+4. **OA 正文由路由器抓**：OA 详情接口 `getInformation.action` 仅内网可访问，`fetch_and_upload.sh` 在抓列表后逐条抓详情，把 `oa_details`（id -> 详情 HTML）合入 inbox；Action 端 `parse_oa_detail` 解析出全文。
 4. **curl / jq 在 `/usr/sbin/`**，SSH 默认 PATH 不含，脚本必须 `export PATH=/usr/sbin:$PATH`。
 5. **去重**：学院按 `url`，OA 按数字 `id`（递增）。存 `data/seen.json`。
 6. **推送**：QQ 官方机器人单聊 `POST /v2/users/{user_openid}/messages`；AccessToken 接口 `POST https://api.bot.qq.com/app/getAppAccessToken`，body `{appId, clientSecret}`，header `Authorization: QQBot <token>`。
@@ -48,8 +51,9 @@ My-JLU-Inform/
 │   ├── fetch_and_upload.sh  # 路由器抓取上传（部署到 TF 卡）
 │   └── check_trigger.sh     # 路由器轮询手动触发标志（每3分钟）
 ├── data/
-│   ├── inbox/               # 路由器上传的原始 JSON
-│   ├── trigger/             # Worker 写入的手动触发标志（临时）
+│   ├── inbox/               # 路由器上传的原始 JSON（auto 推送后清洗删除）
+│   ├── notices/             # 清洗后的通知归档（干净 JSON，不含 HTML）
+│   ├── trigger/             # SCF 写入的手动触发标志（临时）
 │   └── seen.json            # 去重记录
 └── docs/
     └── samples/
@@ -106,3 +110,4 @@ My-JLU-Inform/
 - 2026-09-08：新增手动触发（CF Worker + check_trigger.sh + analyze.py manual）。
 - 2026-09-08：修复 Ed25519（改纯 JS，Workers 不支持 raw 私钥 import）；修复 manual 触发 trigger_ts 时区（UTC→北京）。
 - 2026-09-09：workers.dev 被墙，改用腾讯云函数 SCF（事件函数 + 函数URL）；修复 Node https 缺 User-Agent 导致 GitHub API 403；手动触发全链路验证通过。
+- 2026-09-09：改为 deepseek-v4-flash + thinking disabled；有关项全文推送、无关项简报；路由器新增抓 OA 详情正文；inbox 清洗归档到 data/notices；修复 inbox 日期解析与 OA 列表重复 extend 的 bug。

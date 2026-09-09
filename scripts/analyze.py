@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-"""主逻辑：解析 inbox → 去重/时间窗 → DeepSeek 分类 → QQ 推送。
+"""主逻辑：解析 inbox → 去重/时间窗 → DeepSeek 分类 → 全文/简报 → QQ 推送。
 
 两种模式（互不干扰）：
-- auto   （定时触发）：seen.json 增量去重，只推本周期新增，推送后更新 seen。
-- manual （QQ「更新」触发）：以触发时刻为基准推最近 12 小时，不读不写 seen。
+- auto   （定时触发）：seen.json 增量去重，只推本周期新增；推送后更新 seen，并把 inbox 清洗为 data/notices。
+- manual （QQ「更新」触发）：以触发时刻为基准推最近 12 小时，不读不写 seen，不清洗 inbox。
 """
 import os
 import re
@@ -14,22 +14,26 @@ from datetime import datetime, timedelta, timezone
 
 import requests
 
-from parse_html import parse_chem, parse_oa
+from parse_html import parse_chem, parse_oa, parse_chem_detail, parse_oa_detail
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 INBOX = os.path.join(REPO, "data", "inbox")
+NOTICES = os.path.join(REPO, "data", "notices")
 SEEN = os.path.join(REPO, "data", "seen.json")
 PROMPT = os.path.join(REPO, "scripts", "prompt.md")
 
+UA = "Mozilla/5.0 (compatible; JLU-Notify/1.0)"
+
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
-DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
+DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash")
 QQ_APP_ID = os.environ.get("QQ_APP_ID", "")
 QQ_APP_SECRET = os.environ.get("QQ_APP_SECRET", "")
 QQ_USER_OPENID = os.environ.get("QQ_USER_OPENID", "")
 
 MODE = os.environ.get("MODE", "auto")          # auto / manual
-TRIGGER_TS = os.environ.get("TRIGGER_TS", "")  # 手动触发时刻（ISO）
+TRIGGER_TS = os.environ.get("TRIGGER_TS", "")  # 手动触发时刻（ISO，UTC 带 Z）
 WINDOW_HOURS = 12
+CST = timezone(timedelta(hours=8))
 
 
 # ---------- seen ----------
@@ -46,12 +50,40 @@ def save_seen(seen):
 
 
 # ---------- inbox ----------
+def _dedup_within(notices):
+    seen = set()
+    out = []
+    for n in notices:
+        key = ("oa", n["id"]) if n["source"] == "oa" else ("chem", n["url"])
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(n)
+    return out
+
+
+def _ts_date(ts):
+    """从 ts 字符串解析出 YYYY-MM-DD，兼容 ISO 和 MM/DD/YYYY。"""
+    if not ts:
+        return datetime.now().strftime("%Y-%m-%d")
+    m = re.search(r"(\d{4})-(\d{2})-(\d{2})", ts)
+    if m:
+        return f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+    m = re.search(r"(\d{2})/(\d{2})/(\d{4})", ts)
+    if m:
+        return f"{m.group(3)}-{m.group(1)}-{m.group(2)}"
+    return datetime.now().strftime("%Y-%m-%d")
+
+
 def parse_inbox_file(path):
+    """解析单个 inbox JSON，返回 {stamp, ts, notices}。"""
     with open(path, encoding="utf-8") as f:
         data = json.load(f)
     ts = data.get("ts", "")
-    fetched_date = ts[:10] if ts and len(ts) >= 10 else datetime.now().strftime("%Y-%m-%d")
+    fetched_date = _ts_date(ts)
     pages = data.get("pages", {})
+    oa_details = data.get("oa_details", {})
+
     notices = []
     for key, src in (("chem1", "chem"), ("chem2", "chem"),
                      ("bks1", "bks"), ("bks2", "bks"),
@@ -59,10 +91,21 @@ def parse_inbox_file(path):
         html = pages.get(key, "")
         if html:
             notices.extend(parse_chem(html, src))
-    html = pages.get("oa", "")
-    if html:
-        notices.extend(parse_oa(html, fetched_date))
-    return notices
+
+    oa_html = pages.get("oa", "")
+    if oa_html:
+        oa_items = parse_oa(oa_html, fetched_date)
+        for n in oa_items:
+            dh = oa_details.get(n["id"], "")
+            if dh:
+                try:
+                    n["fulltext"] = parse_oa_detail(dh)["fulltext"]
+                except Exception:
+                    n["fulltext"] = ""
+        notices.extend(oa_items)
+
+    notices = _dedup_within(notices)
+    return {"stamp": data.get("stamp", ""), "ts": ts, "notices": notices}
 
 
 def dedup(notices, seen):
@@ -88,15 +131,8 @@ def mark_seen(seen, notices):
     return seen
 
 
-CST = timezone(timedelta(hours=8))
-
-
 def _parse_trigger(trigger_ts):
-    """把触发时刻统一转成北京时间(naive)。
-
-    Worker 写入的是 UTC ISO（带 Z）；路由器/action 原样透传。
-    通知里的时间都是北京时间(naive)，所以这里统一到北京时间再比较。
-    """
+    """把触发时刻统一转成北京时间(naive)。"""
     if trigger_ts:
         s = trigger_ts.strip()
         try:
@@ -118,7 +154,6 @@ def filter_manual_window(notices, trigger_ts):
     out = []
     for n in notices:
         if n["source"] == "oa" and n.get("dt"):
-            # OA 有精确时间：只用 dt 判断，不 fallback 到日期
             try:
                 if datetime.strptime(n["dt"], "%Y-%m-%d %H:%M") >= start:
                     out.append(n)
@@ -126,7 +161,6 @@ def filter_manual_window(notices, trigger_ts):
                 pass
             continue
         if n.get("date"):
-            # 学院只有日期：按日期近似过滤
             try:
                 if datetime.strptime(n["date"], "%Y-%m-%d").date() >= start.date():
                     out.append(n)
@@ -159,11 +193,12 @@ def call_deepseek(notices):
                 {"role": "system", "content": prompt},
                 {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
             ],
+            "thinking": {"type": "disabled"},
             "response_format": {"type": "json_object"},
             "temperature": 0,
-            "max_tokens": 1024,
+            "max_tokens": 2048,
         },
-        timeout=90,
+        timeout=120,
     )
     resp.raise_for_status()
     content = resp.json()["choices"][0]["message"]["content"]
@@ -174,6 +209,25 @@ def call_deepseek(notices):
     return json.loads(content)
 
 
+# ---------- 详情正文 ----------
+def fetch_chem_fulltext(n):
+    """为学院通知抓详情页正文；OA 的正文已由路由器抓取并写入 inbox。"""
+    if n["source"] == "oa":
+        return n
+    if n.get("fulltext"):
+        return n
+    try:
+        r = requests.get(n["url"], headers={"User-Agent": UA}, timeout=20)
+        r.raise_for_status()
+        r.encoding = "utf-8"
+        d = parse_chem_detail(r.text)
+        n["fulltext"] = (d.get("fulltext") or "").strip() or (n.get("summary") or "").strip()
+    except Exception as e:
+        print(f"[warn] 详情获取失败 {n['url']}: {e}", file=sys.stderr)
+        n["fulltext"] = (n.get("summary") or "").strip()
+    return n
+
+
 # ---------- QQ ----------
 def qq_get_token(app_id, app_secret):
     r = requests.post(
@@ -182,10 +236,9 @@ def qq_get_token(app_id, app_secret):
         timeout=30,
     )
     r.raise_for_status()
-    data = r.json()
-    token = data.get("access_token")
+    token = r.json().get("access_token")
     if not token:
-        raise RuntimeError(f"getAppAccessToken no token: {data}")
+        raise RuntimeError(f"getAppAccessToken 无 token: {r.text[:200]}")
     return token
 
 
@@ -195,8 +248,24 @@ def _markdown_to_plain(text):
     return t
 
 
-def qq_send(token, openid, markdown_text):
-    for msg_type, content in ((2, markdown_text), (0, _markdown_to_plain(markdown_text))):
+def _chunk_text(text, size=1600):
+    if len(text) <= size:
+        return [text]
+    chunks = []
+    cur = ""
+    for para in text.split("\n"):
+        if len(cur) + len(para) + 1 > size and cur:
+            chunks.append(cur)
+            cur = para
+        else:
+            cur = cur + "\n" + para if cur else para
+    if cur:
+        chunks.append(cur)
+    return chunks
+
+
+def _qq_send_one(token, openid, text):
+    for msg_type, content in ((2, text), (0, _markdown_to_plain(text))):
         body = {"msg_type": msg_type}
         if msg_type == 2:
             body["markdown"] = {"content": content}
@@ -221,31 +290,68 @@ def qq_send(token, openid, markdown_text):
     return False
 
 
+def qq_send(token, openid, markdown_text):
+    for chunk in _chunk_text(markdown_text):
+        if not _qq_send_one(token, openid, chunk):
+            return False
+    return True
+
+
 # ---------- 文案 ----------
+def _clip(s, maxlen=900):
+    s = (s or "").strip()
+    if len(s) <= maxlen:
+        return s
+    return s[:maxlen].rstrip() + "……（详见原文链接）"
+
+
 def build_message(rel, oth, stamp, mode):
     head = "## JLU通知 · 手动更新（最近12小时）" if mode == "manual" else f"## JLU通知 · {stamp}"
     lines = [head]
     if rel:
         lines.append("")
-        lines.append(f"### 与你相关 {len(rel)} 条")
+        lines.append(f"### 🔔 与你相关 {len(rel)} 条")
         for n in rel:
             lines.append("")
-            lines.append(f"- **{n['title']}**")
-            lines.append(f"  - 关联：{n.get('why', '')}")
-            lines.append(f"  - 日期：{n.get('date', '')}")
-            lines.append(f"  - [查看链接]({n['url']})")
+            lines.append(f"**{n['title']}**")
+            lines.append(f"- 关联：{n.get('why', '')}")
+            lines.append(f"- 日期：{n.get('date', '')}")
+            ft = _clip(n.get("fulltext") or n.get("summary") or "", 2500)
+            if ft:
+                lines.append(f"- 全文：{ft}")
+            lines.append(f"- 原文：{n['url']}")
     if oth:
         cats = {}
         for n in oth:
-            c = n.get("cat", "其他")
-            cats[c] = cats.get(c, 0) + 1
-        summary = "、".join(f"{k} {v} 条" for k, v in cats.items())
+            c = n.get("cat") or "其他"
+            cats.setdefault(c, []).append(n)
         lines.append("")
-        lines.append(f"### 其余 {len(oth)} 条简要")
-        lines.append(f"{summary}")
+        lines.append(f"### 📋 其他通知简报 {len(oth)} 条")
+        for c, items in cats.items():
+            lines.append(f"**{c}**（{len(items)}）")
+            for n in items:
+                brief = _clip(n.get("brief") or n.get("title") or "", 120)
+                lines.append(f"- {brief}")
         lines.append("")
-        lines.append("（全部通知见仓库 data/inbox）")
+        lines.append("（完整清单见仓库 data/notices）")
     return "\n".join(lines)
+
+
+# ---------- 清洗 ----------
+def clean_inbox(batches):
+    os.makedirs(NOTICES, exist_ok=True)
+    for path, stamp, ts, notices in batches:
+        name = os.path.splitext(os.path.basename(path))[0]
+        if not stamp:
+            stamp = name
+        dest = os.path.join(NOTICES, f"{stamp}.json")
+        with open(dest, "w", encoding="utf-8") as f:
+            json.dump({"stamp": stamp, "ts": ts, "notices": notices}, f, ensure_ascii=False, indent=2)
+        try:
+            os.remove(path)
+        except OSError as e:
+            print(f"[warn] 删除 inbox 失败 {path}: {e}", file=sys.stderr)
+        print(f"[info] 已清洗 inbox -> {os.path.relpath(dest, REPO)}")
 
 
 # ---------- main ----------
@@ -259,10 +365,13 @@ def main():
 
     seen = load_seen()
     inbox_files = sorted(glob.glob(os.path.join(INBOX, "*.json")))
+    batches = []
     all_notices = []
     for p in inbox_files:
         try:
-            all_notices.extend(parse_inbox_file(p))
+            parsed = parse_inbox_file(p)
+            batches.append((p, parsed["stamp"], parsed["ts"], parsed["notices"]))
+            all_notices.extend(parsed["notices"])
         except Exception as e:
             print(f"[warn] 跳过 {os.path.basename(p)}: {e}", file=sys.stderr)
 
@@ -290,12 +399,18 @@ def main():
         n = idx.get(str(r.get("id")))
         if n:
             n["cat"] = r.get("cat", "其他")
+            n["brief"] = r.get("brief", "")
             oth.append(n)
     covered = {str(r.get("id")) for r in result.get("relevant", []) + result.get("others", [])}
     for i, n in idx.items():
         if i not in covered:
             n["cat"] = "未分类"
+            n["brief"] = n["title"]
             oth.append(n)
+
+    # 抓学院详情正文（OA 已由路由器抓好）
+    for n in new:
+        fetch_chem_fulltext(n)
 
     stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
     msg = build_message(rel, oth, stamp, MODE)
@@ -309,10 +424,12 @@ def main():
     if MODE == "auto":
         mark_seen(seen, new)
         save_seen(seen)
+        clean_inbox(batches)
         print(f"[info] auto：已更新 seen（相关 {len(rel)}，其余 {len(oth)}）")
     else:
-        print(f"[info] manual：不更新 seen（相关 {len(rel)}，其余 {len(oth)}）")
+        print(f"[info] manual：不更新 seen、不清洗 inbox（相关 {len(rel)}，其余 {len(oth)}）")
 
 
 if __name__ == "__main__":
     main()
+

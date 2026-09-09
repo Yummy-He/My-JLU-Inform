@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""HTML 解析：化学学院通知 + 学校 OA 通知。"""
+"""HTML 解析：化学学院通知 + 学校 OA 通知（列表页 + 详情页）。"""
 import re
 from datetime import datetime, timedelta
 from urllib.parse import urljoin
@@ -9,11 +9,14 @@ CHEM_BASE = "https://chem.jlu.edu.cn"
 OA_BASE = "https://oa.jlu.edu.cn/defaultroot"
 
 
+def _clean_text(node):
+    return re.sub(r"\s+", " ", node.get_text(" ", strip=True)).strip()
+
+
 def parse_chem(html, source):
     """解析化学学院列表页 HTML。
 
     source: chem / bks / yjs
-    返回: [{id(url), title, url, date, dt(None), summary, org, source}]
     """
     soup = BeautifulSoup(html, "html.parser")
     items = []
@@ -36,25 +39,33 @@ def parse_chem(html, source):
         date = ""
         if day and year:
             date = f"{year.get_text(strip=True)}-{day.get_text(strip=True)}"
-        summary = ""
-        if abst:
-            summary = re.sub(r"\s+", " ", abst.get_text(" ", strip=True)).strip()
+        summary = _clean_text(abst) if abst else ""
 
         items.append({
             "id": url,
             "title": a.get_text(strip=True),
             "url": url,
             "date": date,
-            "dt": None,                          # 学院无精确时间
+            "dt": None,
             "summary": summary,
+            "fulltext": "",
             "org": "",
             "source": source,
         })
     return items
 
 
+def parse_chem_detail(html):
+    """解析化学学院详情页 HTML。"""
+    soup = BeautifulSoup(html, "html.parser")
+    h1 = soup.select_one("h1")
+    title = h1.get_text(" ", strip=True) if h1 else ""
+    body = soup.select_one("#vsb_content_4") or soup.select_one(".v_news_content") or soup.select_one(".article-text")
+    fulltext = _clean_text(body) if body else ""
+    return {"title": title, "fulltext": fulltext}
+
+
 def _oa_datetime(raw, fetched_date):
-    """把 OA 的「今天/昨天 HH:MM」换成完整时间，返回 (date, dt)。"""
     s = raw.replace("\xa0", " ").replace("&nbsp;", " ").strip()
     m = re.match(r"今天\s+(\d{1,2}:\d{2})", s)
     if m:
@@ -67,7 +78,6 @@ def _oa_datetime(raw, fetched_date):
         except ValueError:
             ds = fetched_date
         return ds, f"{ds} {m.group(1)}"
-    # 已是 2026-09-03 这类具体日期，无精确时间
     return s, None
 
 
@@ -99,9 +109,20 @@ def parse_oa(html, fetched_date):
             "title": title,
             "url": f"{OA_BASE}/PortalInformation!getInformation.action?id={oid}&channelId=179577",
             "date": date,
-            "dt": dt,                            # OA 有精确时间（今天/昨天）
+            "dt": dt,
             "summary": "",
+            "fulltext": "",
             "org": org,
             "source": "oa",
         })
     return items
+
+
+def parse_oa_detail(html):
+    """解析学校 OA 详情页 HTML。"""
+    soup = BeautifulSoup(html, "html.parser")
+    t = soup.select_one(".content_t")
+    title = t.get_text(" ", strip=True) if t else ""
+    body = soup.select_one(".content_font")
+    fulltext = _clean_text(body) if body else ""
+    return {"title": title, "fulltext": fulltext}
