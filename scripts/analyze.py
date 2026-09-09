@@ -99,7 +99,10 @@ def parse_inbox_file(path):
             dh = oa_details.get(n["id"], "")
             if dh:
                 try:
-                    n["fulltext"] = parse_oa_detail(dh)["fulltext"]
+                    det = parse_oa_detail(dh)
+                    n["fulltext"] = det.get("fulltext") or ""
+                    if det.get("title"):
+                        n["title"] = det["title"]
                 except Exception:
                     n["fulltext"] = ""
         notices.extend(oa_items)
@@ -291,9 +294,14 @@ def _qq_send_one(token, openid, text):
 
 
 def qq_send(token, openid, markdown_text):
-    for chunk in _chunk_text(markdown_text):
-        if not _qq_send_one(token, openid, chunk):
-            return False
+    if isinstance(markdown_text, list):
+        msgs = markdown_text
+    else:
+        msgs = [markdown_text]
+    for m in msgs:
+        for chunk in _chunk_text(m):
+            if not _qq_send_one(token, openid, chunk):
+                return False
     return True
 
 
@@ -305,36 +313,56 @@ def _clip(s, maxlen=900):
     return s[:maxlen].rstrip() + "……（详见原文链接）"
 
 
-def build_message(rel, oth, stamp, mode):
-    head = "## JLU通知 · 手动更新（最近12小时）" if mode == "manual" else f"## JLU通知 · {stamp}"
-    lines = [head]
-    if rel:
-        lines.append("")
-        lines.append(f"### 🔔 与你相关 {len(rel)} 条")
-        for n in rel:
-            lines.append("")
-            lines.append(f"**{n['title']}**")
-            lines.append(f"- 关联：{n.get('why', '')}")
-            lines.append(f"- 日期：{n.get('date', '')}")
-            ft = _clip(n.get("fulltext") or n.get("summary") or "", 2500)
-            if ft:
-                lines.append(f"- 全文：{ft}")
-            lines.append(f"- 原文：{n['url']}")
+def _indent(text, spaces="　　"):
+    """给正文做首行缩进（全角空格在 QQ 里显示更稳定）。"""
+    if not text:
+        return ""
+    paras = [x.strip() for x in text.split(chr(10)) if x.strip()]
+    if not paras:
+        return ""
+    return chr(10).join(spaces + x for x in paras)
+
+
+def _fmt_relevant(n, head):
+    parts = [head, "", "**" + n["title"] + "**", "**关联：**" + n.get("why", ""), "**日期：**" + n.get("date", "")]
+    ft = _clip(n.get("fulltext") or n.get("summary") or "", 2500)
+    if ft:
+        parts.append("")
+        parts.append(_indent(ft))
+    parts.append("")
+    parts.append(n["url"])
+    return chr(10).join(parts)
+
+
+def _fmt_others(oth, head):
+    parts = [head]
+    cats = {}
+    for n in oth:
+        cats.setdefault(n.get("cat") or "其他", []).append(n)
+    parts.append("")
+    parts.append("**共 " + str(len(oth)) + " 条，按分类如下**")
+    for c, items in cats.items():
+        parts.append("")
+        parts.append("**" + c + "**（" + str(len(items)) + "）")
+        for n in items:
+            brief = _clip(n.get("brief") or "", 80)
+            t = n.get("title") or ""
+            line = t + "：" + brief if brief else t
+            parts.append(_indent(line))
+    parts.append("")
+    parts.append("完整清单见仓库 data/notices")
+    return chr(10).join(parts)
+
+
+def build_messages(rel, oth, stamp, mode):
+    """返回待发送消息列表：有关的一条一消息，无关的聚合成一条。"""
+    head = "## JLU通知 · 手动更新（最近12小时）" if mode == "manual" else "## JLU通知 · " + stamp
+    msgs = []
+    for n in rel:
+        msgs.append(_fmt_relevant(n, head))
     if oth:
-        cats = {}
-        for n in oth:
-            c = n.get("cat") or "其他"
-            cats.setdefault(c, []).append(n)
-        lines.append("")
-        lines.append(f"### 📋 其他通知简报 {len(oth)} 条")
-        for c, items in cats.items():
-            lines.append(f"**{c}**（{len(items)}）")
-            for n in items:
-                brief = _clip(n.get("brief") or n.get("title") or "", 120)
-                lines.append(f"- {brief}")
-        lines.append("")
-        lines.append("（完整清单见仓库 data/notices）")
-    return "\n".join(lines)
+        msgs.append(_fmt_others(oth, head))
+    return msgs
 
 
 # ---------- 清洗 ----------
@@ -415,15 +443,17 @@ def main():
         fetch_chem_fulltext(n)
 
     stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-    msg = build_message(rel, oth, stamp, MODE)
-    print(msg)
+    msgs = build_messages(rel, oth, stamp, MODE)
+    for i, m in enumerate(msgs, 1):
+        print(f"===== 消息 {i}/{len(msgs)} =====")
+        print(m)
+        print()
 
     if os.environ.get("ANALYZE_DRY_RUN") == "1":
-        print("[dry-run] 跳过 QQ 发送，消息如下：")
-        print(msg)
+        print("[dry-run] 跳过 QQ 发送")
         return
     token = qq_get_token(QQ_APP_ID, QQ_APP_SECRET)
-    if not qq_send(token, QQ_USER_OPENID, msg):
+    if not qq_send(token, QQ_USER_OPENID, msgs):
         print("[error] QQ 推送失败", file=sys.stderr)
         sys.exit(1)
 
