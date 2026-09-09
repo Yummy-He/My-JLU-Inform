@@ -25,6 +25,7 @@ SHA=$(echo "$LIST" | jq -r '.[0].sha' 2>/dev/null)
 CONTENT=$(curl -s -m 30 -H "$AUTH" -H "$HDR" "$API/contents/data/trigger/$NAME" | jq -r '.content' 2>/dev/null)
 TS=$(echo "$CONTENT" | base64 -d 2>/dev/null | jq -r '.ts' 2>/dev/null)
 [ -z "$TS" ] && exit 0
+OPENID=$(echo "$CONTENT" | base64 -d 2>/dev/null | jq -r '.openid // ""' 2>/dev/null)
 
 echo "[trigger] 发现手动触发 $TS，开始抓取..."
 
@@ -34,7 +35,7 @@ echo "[trigger] 发现手动触发 $TS，开始抓取..."
 # 3) 触发 workflow（manual 模式 + 触发时刻）
 curl -s -m 30 -X POST -H "$AUTH" -H "$HDR" \
   "$API/actions/workflows/digest.yml/dispatches" \
-  -d "{\"ref\":\"main\",\"inputs\":{\"mode\":\"manual\",\"trigger_ts\":\"$TS\"}}" \
+  -d "{\"ref\":\"main\",\"inputs\":{\"mode\":\"manual\",\"trigger_ts\":\"$TS\",\"target_openid\":\"$OPENID\"}}" \
   -o /dev/null
 
 # 4) 删除 trigger 文件

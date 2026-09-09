@@ -186,8 +186,8 @@ async function qqReply(env, token, openid, text) {
   }, { msg_type: 0, content: text });
 }
 
-async function writeTrigger(env, ts) {
-  const body = JSON.stringify({ ts });
+async function writeTrigger(env, ts, openid) {
+  const body = JSON.stringify({ ts, openid: openid || '' });
   const b64 = Buffer.from(body).toString('base64');
   const name = `trigger_${Date.now()}.json`;
   const r = await httpsRequest('PUT', `${GH_API}/contents/data/trigger/${name}`, {
@@ -289,7 +289,7 @@ exports.main_handler = async (event) => {
       let reason = '';
       try {
         await ensureSubscribed(env, openid);
-        ok = await writeTrigger(env, ts);
+        ok = await writeTrigger(env, ts, openid);
       } catch (e) {
         reason = String(e && e.message ? e.message : e);
         console.error('[writeTrigger]', reason);

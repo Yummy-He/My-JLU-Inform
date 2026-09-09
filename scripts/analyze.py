@@ -30,6 +30,7 @@ DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash")
 QQ_APP_ID = os.environ.get("QQ_APP_ID", "")
 QQ_APP_SECRET = os.environ.get("QQ_APP_SECRET", "")
 QQ_USER_OPENID = os.environ.get("QQ_USER_OPENID", "")
+TARGET_OPENID = os.environ.get("TARGET_OPENID", "")  # manual 模式：只推给这个 openid（可选）
 
 MODE = os.environ.get("MODE", "auto")          # auto / manual
 TRIGGER_TS = os.environ.get("TRIGGER_TS", "")  # 手动触发时刻（ISO，UTC 带 Z）
@@ -478,6 +479,11 @@ def main():
     if not subscribers:
         print("[error] 无订阅者（subscribers.json 为空且未配置 QQ_USER_OPENID）", file=sys.stderr)
         sys.exit(1)
+    if TARGET_OPENID:
+        subscribers = [x for x in subscribers if x == TARGET_OPENID]
+        if not subscribers:
+            print(f"[error] target_openid 不在订阅列表: {TARGET_OPENID[:12]}...", file=sys.stderr)
+            sys.exit(1)
     print(f"[info] 向 {len(subscribers)} 位订阅者推送")
     for openid in subscribers:
         if not qq_send(token, openid, msgs):

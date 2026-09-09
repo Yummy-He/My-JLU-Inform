@@ -16,6 +16,10 @@ on:
         description: '手动触发时刻（ISO，仅 manual 模式用）'
         required: false
         default: ''
+      target_openid:
+        description: '仅推送给该 openid（manual 模式；留空则推给全部订阅者）'
+        required: false
+        default: ''
 
 permissions:
   contents: write
@@ -38,6 +42,7 @@ jobs:
           QQ_USER_OPENID: ${{ secrets.QQ_USER_OPENID }}
           MODE: ${{ github.event.inputs.mode || 'auto' }}
           TRIGGER_TS: ${{ github.event.inputs.trigger_ts || '' }}
+          TARGET_OPENID: ${{ github.event.inputs.target_openid || '' }}
         run: python scripts/analyze.py
       - name: commit notices
         run: |
