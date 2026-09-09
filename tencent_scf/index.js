@@ -200,6 +200,47 @@ async function writeTrigger(env, ts) {
   return true;
 }
 
+async function ensureSubscribed(env, openid) {
+  if (!openid) return false;
+  const path = 'data/subscribers.json';
+  const url = `${GH_API}/contents/${path}`;
+  let ids = [];
+  let sha = null;
+  const get = await httpsRequest('GET', url, {
+    Authorization: `token ${env.GH_TOKEN}`,
+    Accept: 'application/vnd.github+json',
+  });
+  if (get.status === 200) {
+    try {
+      const j = JSON.parse(get.body);
+      sha = j.sha;
+      const raw = Buffer.from(j.content, 'base64').toString('utf8');
+      const d = JSON.parse(raw);
+      ids = d.openids || [];
+    } catch (e) {
+      console.error('[subscribers parse]', e && e.message ? e.message : e);
+    }
+  } else if (get.status !== 404) {
+    console.error('[subscribers get]', get.status, (get.body || '').slice(0, 200));
+    return false;
+  }
+
+  if (ids.includes(openid)) return true;
+
+  ids.push(openid);
+  const body = JSON.stringify({ openids: ids }, null, 2);
+  const b64 = Buffer.from(body).toString('base64');
+  const put = await httpsRequest('PUT', url, {
+    Authorization: `token ${env.GH_TOKEN}`,
+    Accept: 'application/vnd.github+json',
+  }, {
+    message: `subscribe ${openid.slice(0, 12)}`,
+    content: b64,
+    sha,
+  });
+  return put.status >= 200 && put.status < 300;
+}
+
 function jsonResp(status, obj) {
   return {
     statusCode: status,
@@ -247,6 +288,7 @@ exports.main_handler = async (event) => {
       let ok = false;
       let reason = '';
       try {
+        await ensureSubscribed(env, openid);
         ok = await writeTrigger(env, ts);
       } catch (e) {
         reason = String(e && e.message ? e.message : e);

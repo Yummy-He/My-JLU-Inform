@@ -20,6 +20,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 INBOX = os.path.join(REPO, "data", "inbox")
 NOTICES = os.path.join(REPO, "data", "notices")
 SEEN = os.path.join(REPO, "data", "seen.json")
+SUBSCRIBERS = os.path.join(REPO, "data", "subscribers.json")
 PROMPT = os.path.join(REPO, "scripts", "prompt.md")
 
 UA = "Mozilla/5.0 (compatible; JLU-Notify/1.0)"
@@ -42,6 +43,21 @@ def load_seen():
         with open(SEEN, encoding="utf-8") as f:
             return json.load(f)
     return {"chem_urls": {}, "oa_ids": {}}
+
+
+def load_subscribers():
+    """读取订阅者 openid 列表；文件不存在则回退到环境变量里的单个 openid。"""
+    if os.path.exists(SUBSCRIBERS):
+        try:
+            with open(SUBSCRIBERS, encoding="utf-8") as f:
+                data = json.load(f)
+            ids = data.get("openids", []) if isinstance(data, dict) else list(data)
+            ids = [x for x in ids if isinstance(x, str) and x]
+            if ids:
+                return ids
+        except Exception as e:
+            print(f"[warn] subscribers.json 读取失败: {e}", file=sys.stderr)
+    return [QQ_USER_OPENID] if QQ_USER_OPENID else []
 
 
 def save_seen(seen):
@@ -393,8 +409,8 @@ def main():
     if not DEEPSEEK_API_KEY:
         print("[error] DEEPSEEK_API_KEY 未配置", file=sys.stderr)
         sys.exit(2)
-    if not (QQ_APP_ID and QQ_APP_SECRET and QQ_USER_OPENID):
-        print("[error] QQ 配置不完整", file=sys.stderr)
+    if not (QQ_APP_ID and QQ_APP_SECRET):
+        print("[error] QQ 配置不完整（缺少 QQ_APP_ID / QQ_APP_SECRET）", file=sys.stderr)
         sys.exit(2)
 
     seen = load_seen()
@@ -458,9 +474,16 @@ def main():
         print("[dry-run] 跳过 QQ 发送")
         return
     token = qq_get_token(QQ_APP_ID, QQ_APP_SECRET)
-    if not qq_send(token, QQ_USER_OPENID, msgs):
-        print("[error] QQ 推送失败", file=sys.stderr)
+    subscribers = load_subscribers()
+    if not subscribers:
+        print("[error] 无订阅者（subscribers.json 为空且未配置 QQ_USER_OPENID）", file=sys.stderr)
         sys.exit(1)
+    print(f"[info] 向 {len(subscribers)} 位订阅者推送")
+    for openid in subscribers:
+        if not qq_send(token, openid, msgs):
+            print(f"[error] 推送失败 openid={openid[:12]}...", file=sys.stderr)
+        else:
+            print(f"[ok] 已推送 openid={openid[:12]}...")
 
     if MODE == "auto":
         mark_seen(seen, new)
