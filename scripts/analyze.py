@@ -324,12 +324,10 @@ def _indent(text, spaces="　　"):
 
 
 def _fmt_relevant(n, head):
-    parts = [head, "", "**" + n["title"] + "**", "**关联：**" + n.get("why", ""), "**日期：**" + n.get("date", "")]
+    parts = [head, "", "**" + n["title"] + "**", "关联：" + n.get("why", ""), "日期：" + n.get("date", "")]
     ft = _clip(n.get("fulltext") or n.get("summary") or "", 2500)
     if ft:
-        parts.append("")
         parts.append(_indent(ft))
-    parts.append("")
     parts.append(n["url"])
     return chr(10).join(parts)
 
