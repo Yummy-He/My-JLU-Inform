@@ -86,3 +86,10 @@ else
   cp "$OUT" "$WORK/fail/$STAMP.json"
   echo "[fail] upload $STAMP http=$HTTP (已存 fail/ 可补传)"
 fi
+
+# 清理旧文件，避免 TF 卡被占满：out 保留 7 天，fail 保留 30 天
+find "$WORK/out" -name '*.json' -mtime +7 -delete 2>/dev/null
+find "$WORK/fail" -name '*.json' -mtime +30 -delete 2>/dev/null
+# 清理可能残留的过期 OA 详情临时文件
+find "$TMP" -name 'oa_detail_*.htm' -mtime +7 -delete 2>/dev/null
+
