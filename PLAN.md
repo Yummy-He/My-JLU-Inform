@@ -28,7 +28,8 @@
 6. **推送**：QQ 官方机器人单聊 `POST /v2/users/{user_openid}/messages`；AccessToken 接口 `POST https://api.bot.qq.com/app/getAppAccessToken`，body `{appId, clientSecret}`，header `Authorization: QQBot <token>`。
 7. **定时**：路由器 12:31/19:01（CST）抓取上传；Action `35 4`/`5 11`（UTC，即北京 12:35/19:05）。
 8. **幂等**：auto 模式每次解析全部 inbox + seen 去重；manual 模式不读不写 seen。
-9. **手动触发走云端（Cloudflare Worker，无状态 HTTP）**，不在路由器常驻进程（内存太小，也无 Python）。
+9. **手动触发走云端（腾讯云函数 SCF · 函数URL，无状态 HTTP）**，不在路由器常驻进程（内存太小，也无 Python）。
+   - 原因：Cloudflare `*.workers.dev` 在国内被墙，QQ 回调服务器连不上；腾讯云 `*.tencentscf.com` 国内可直连。
 
 ---
 
@@ -64,7 +65,7 @@ My-JLU-Inform/
 - [x] Phase 4 路由器部署：fetch 脚本 + cron（12:31/19:01）+ mtd_storage save
 - [x] Phase 5 自动链路联调：DeepSeek 分类 + QQ 推送 端到端通过
 - [x] Phase 6 手动触发云端方案：CF Worker（op=13 验签 + C2C 消息）+ 路由器 check_trigger.sh + analyze.py manual 模式
-- [ ] Phase 7 手动触发收尾：用户更新 Worker 代码与 Secrets，重新保存 QQ 回调并实测「更新」
+- [x] Phase 7 手动触发收尾：腾讯云函数版上线，QQ「更新」→ SCF → GitHub trigger → 路由器轮询 → Action manual → 推送 全链路通过
 
 ---
 
@@ -76,7 +77,7 @@ My-JLU-Inform/
 4. 路由器 `check_trigger.sh` 每 3 分钟轮询 `data/trigger/` → 发现则抓取上传 + `workflow_dispatch`（mode=manual, trigger_ts=ts）→ 删除 trigger 文件。
 5. Action 跑 `analyze.py` manual 模式：`trigger_ts` 统一转北京时间（Worker 写的是 UTC 带 Z），过滤最近 12 小时，不写 seen。
 
-### CF Worker Secrets（Workers 页面 Settings → Variables and Secrets）
+### 腾讯云函数环境变量（函数配置 → 环境变量）
 - `QQ_APP_SECRET`
 - `QQ_APP_ID`
 - `GH_TOKEN`（GitHub fine-grained PAT，Contents 读写）
@@ -103,4 +104,5 @@ My-JLU-Inform/
 - 2026-09-08：修复 fetch 脚本 dirname 拼第2页 URL、上传 body 改文件。
 - 2026-09-08：自动链路端到端通过；digest.yml 双 cron + workflow_dispatch。
 - 2026-09-08：新增手动触发（CF Worker + check_trigger.sh + analyze.py manual）。
-- 2026-09-08：修复 Worker Ed25519（改纯 JS，因 Workers 不支持 raw 私钥 import）；修复 manual 触发 trigger_ts 时区（UTC→北京）。
+- 2026-09-08：修复 Ed25519（改纯 JS，Workers 不支持 raw 私钥 import）；修复 manual 触发 trigger_ts 时区（UTC→北京）。
+- 2026-09-09：workers.dev 被墙，改用腾讯云函数 SCF（事件函数 + 函数URL）；修复 Node https 缺 User-Agent 导致 GitHub API 403；手动触发全链路验证通过。
