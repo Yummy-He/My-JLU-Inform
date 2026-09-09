@@ -152,8 +152,8 @@ function httpsRequest(method, url, headers, bodyObj) {
       hostname: u.hostname,
       port: 443,
       path: u.pathname + u.search,
-      headers: Object.assign({}, headers),
-      timeout: 15000,
+      headers: Object.assign({ 'User-Agent': 'JLU-Notify/1.0' }, headers),
+      timeout: 20000,
     };
     if (data) {
       opts.headers['Content-Type'] = 'application/json';
@@ -194,7 +194,10 @@ async function writeTrigger(env, ts) {
     Authorization: `token ${env.GH_TOKEN}`,
     Accept: 'application/vnd.github+json',
   }, { message: `manual trigger ${ts}`, content: b64 });
-  return r.status >= 200 && r.status < 300;
+  if (!(r.status >= 200 && r.status < 300)) {
+    throw new Error(`gh status=${r.status} body=${(r.body || '').slice(0, 300)}`);
+  }
+  return true;
 }
 
 function jsonResp(status, obj) {
@@ -242,10 +245,12 @@ exports.main_handler = async (event) => {
     if (/更新|刷新|推送/.test(content)) {
       const ts = new Date().toISOString();
       let ok = false;
+      let reason = '';
       try {
         ok = await writeTrigger(env, ts);
       } catch (e) {
-        ok = false;
+        reason = String(e && e.message ? e.message : e);
+        console.error('[writeTrigger]', reason);
       }
       try {
         const token = await qqToken(env);
@@ -253,9 +258,9 @@ exports.main_handler = async (event) => {
           ok ? '✅ 已收到更新请求，约 3~5 分钟后推送最近 12 小时通知'
              : '❌ 触发失败，请稍后重试');
       } catch (e) {
-        // 回复失败不阻断
+        console.error('[qqReply]', e && e.message ? e.message : e);
       }
-      return jsonResp(200, { triggered: ok });
+      return jsonResp(200, { triggered: ok, reason });
     }
     return jsonResp(200, { ignored: true });
   }
