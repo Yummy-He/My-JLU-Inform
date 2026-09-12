@@ -190,6 +190,33 @@ def filter_manual_window(notices, trigger_ts):
 
 
 # ---------- DeepSeek ----------
+def _parse_llm_json(content):
+    """宽松解析模型返回：容忍 JSON 前后/后面有额外文本。"""
+    content = (content or "").strip()
+    print("[deepseek] 原始返回前 600 字：")
+    print(content[:600])
+    if content.startswith("```"):
+        content = re.sub(r"^```(?:json)?\s*", "", content)
+        content = re.sub(r"\s*```$", "", content)
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError:
+        pass
+    dec = json.JSONDecoder()
+    try:
+        obj, _ = dec.raw_decode(content)
+        return obj
+    except json.JSONDecodeError:
+        pass
+    m = re.search(r"\{.*\}", content, re.DOTALL)
+    if m:
+        try:
+            return json.loads(m.group(0))
+        except json.JSONDecodeError:
+            pass
+    raise ValueError("DeepSeek 返回内容无法解析为 JSON")
+
+
 def call_deepseek(notices):
     payload = []
     for i, n in enumerate(notices):
@@ -222,11 +249,7 @@ def call_deepseek(notices):
     )
     resp.raise_for_status()
     content = resp.json()["choices"][0]["message"]["content"]
-    content = content.strip()
-    if content.startswith("```"):
-        content = re.sub(r"^```(?:json)?\s*", "", content)
-        content = re.sub(r"\s*```$", "", content)
-    return json.loads(content)
+    return _parse_llm_json(content)
 
 
 # ---------- 详情正文 ----------
@@ -439,7 +462,11 @@ def main():
         print("[info] 无通知，结束")
         return
 
-    result = call_deepseek(new)
+    try:
+        result = call_deepseek(new)
+    except Exception as e:
+        print(f"[warn] DeepSeek 解析失败，全部按未分类简报处理: {e}", file=sys.stderr)
+        result = {"relevant": [], "others": [{"id": str(i), "cat": "未分类", "brief": n["title"]} for i, n in enumerate(new)]}
     idx = {str(i): n for i, n in enumerate(new)}
     rel, oth = [], []
     for r in result.get("relevant", []):
